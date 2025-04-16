@@ -1,3 +1,4 @@
+
 import os
 import pandas as pd
 import numpy as np
@@ -5,11 +6,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import matplotlib.pyplot as plt
-import seaborn as sns
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QDialog, QVBoxLayout
-from PyQt6.QtCharts import QChart, QChartView, QBarSet, QBarSeries, QBarCategoryAxis, QValueAxis, QLineSeries
-from PyQt6.QtGui import QPainter
 
 
 def convert_volume(vol_str):
@@ -96,16 +92,31 @@ class Model_(Preprocessing):
         self.x, self.y = self.preprocess_data()
         self.x = self.scale_features()
 
+        self.x_train, self.x_test, self.y_train, self.y_test = self.split_data()
 
+         # --- Ensure y_train and y_test are float (good practice) ---
+        # It's safe to do this after split_data() for all models if needed
+        self.y_train = self.y_train.astype(float)
+        self.y_test = self.y_test.astype(float)
+
+        # --- Apply RNN specific reshaping *after* splitting ---
+        if self.__class__.__name__ == 'RNN':
+            # Reshape feature data for RNN [samples, time steps, features]
+            # Important: Reshape train and test sets separately
+            # Assuming 1 time step per sample based on your original reshape logic
+            self.x_train = np.reshape(self.x_train, (self.x_train.shape[0], 1, self.x_train.shape[1]))
+            self.x_test = np.reshape(self.x_test, (self.x_test.shape[0], 1, self.x_test.shape[1]))
+            print(f"RNN data reshaped. x_train shape: {self.x_train.shape}, x_test shape: {self.x_test.shape}")
+            # The y data (y_train, y_test) does not need reshaping for standard RNN regression output
+
+        '''
         if self.__class__.__name__ == 'RNN':
             #Reshape data for RNN [samples, time steps, features]
             self.x = np.reshape(self.x, (self.x.shape[0], 1, self.x.shape[1]))
             self.y_train = self.y_train.astype(float)
             self.y_test = self.y_test.astype(float)
-
-        self.x_train, self.x_test, self.y_train, self.y_test = self.split_data()
-        self.confusion_chart = None
-        self.roc_chart = None
+        '''
+        #self.x_train, self.x_test, self.y_train, self.y_test = self.split_data()
 
     def train(self):
         pass
@@ -115,7 +126,7 @@ class Model_(Preprocessing):
         base_output_dir = "all_outputs"
         #Generate a folder name like 'RandomForest_output' from the class name
         algo_name = self.__class__.__name__
-        specific_dir = os.path.join(base_output_dir, f"{algo_name}_output")
+        specific_dir = os.path.join(base_output_dir, f"{algo_name.replace(' ', '')}_output")
         os.makedirs(specific_dir, exist_ok=True) # Create dir if it doesn't exist
         return specific_dir
 
@@ -129,7 +140,6 @@ class Model_(Preprocessing):
 
 
         # ------REGRESSION EVALUATION-------
-        
         mse = mean_squared_error(self.y_test, y_pred)
         rmse = np.sqrt(mse)
         mae = mean_absolute_error(self.y_test, y_pred)
@@ -175,43 +185,54 @@ class Model_(Preprocessing):
         
 
     def _save_learning_curves(self, history):
-        #Saves accuracy and loss learning curves to specific folder.
-        output_dir = self.get_output_dir()
-        plot_metrics = {}
-        if hasattr(history, 'history'):
-                # Prioritize loss, mae, mse for regression plots
-                if 'loss' in history.history and 'val_loss' in history.history:
-                    plot_metrics['Loss'] = ('loss', 'val_loss')
-                if 'mae' in history.history and 'val_mae' in history.history:
-                    plot_metrics['Mean Absolute Error'] = ('mae', 'val_mae')
-                if 'mse' in history.history and 'val_mse' in history.history:
-                    plot_metrics['Mean Squared Error'] = ('mse', 'val_mse')
-               
-            
-            
-        if not plot_metrics:
-            print("No suitable keys found in history object to plot learning curves.")
+
+        # Saves accuracy and loss learning curves using Matplotlib to the algorithm's specific folder.
+        output_dir = self.get_output_dir() # Get the correct directory
+
+        if not hasattr(history, 'history'):
+            print("Error: History object does not contain 'history' attribute.")
             return
 
-        print("Saving learning curves...")
-        for name, keys in plot_metrics.items():
-            train_key, val_key = keys
-            try:
-                plt.figure()
-                plt.plot(history.history[train_key], label=f'Train {name}')
-                plt.plot(history.history[val_key], label=f'Validation {name}')
-                plt.title(f'Model {name}')
-                plt.ylabel(name)
-                plt.xlabel('Epoch')
-                plt.legend()
-                plt.grid(True)
-                curve_path = os.path.join(output_dir, f"learning_curve_{name.lower().replace(' ', '_')}.png")
-                plt.savefig(curve_path)
-                plt.close()
-                print(f"Saved {name} curve to: {curve_path}")
-            except Exception as e:
-                print(f"Error saving {name} curve: {e}")
+        history_dict = history.history
+        possible_metrics = {
+            'Loss': 'loss',
+            'Mean Absolute Error': 'mae',
+             # Add others if you track them, e.g. 'Mean Squared Error': 'mse'
+             # 'Accuracy': 'accuracy' # Keep this commented out or remove for regression
+        }
 
+        print("Saving learning curves...")
+        plotted_any = False
+
+        for display_name, key_base in possible_metrics.items():
+            train_key = key_base
+            val_key = f'val_{key_base}'
+
+            if train_key in history_dict and val_key in history_dict:
+                plotted_any = True
+                try:
+                    plt.figure()
+                    plt.plot(history_dict[train_key], label=f'Train {display_name}')
+                    plt.plot(history_dict[val_key], label=f'Validation {display_name}')
+                    plt.title(f'Model {display_name}')
+                    plt.ylabel(display_name)
+                    plt.xlabel('Epoch')
+                    plt.legend()
+                    plt.grid(True)
+                    # Generate filename like 'learning_curve_loss.png', 'learning_curve_mean_absolute_error.png'
+                    file_name = f"learning_curve_{key_base}.png"
+                    curve_path = os.path.join(output_dir, file_name)
+                    plt.savefig(curve_path)
+                    plt.close()
+                    print(f"Saved {display_name} curve to: {curve_path}")
+                except Exception as e:
+                    print(f"Error saving {display_name} curve: {e}")
+            else:
+                 print(f"Skipping plot for {display_name}: Keys '{train_key}' or '{val_key}' not found in history.")
+
+        if not plotted_any:
+             print("Warning: No suitable keys found in history object to plot any learning curves.")
+        
 
     def predict(self, X):
         pass
@@ -236,13 +257,34 @@ class SupportVectorMachine(Model_):
         super().__init__(dataset_path)
         from sklearn import svm
 
-        self.svm = svm.SVC(kernel = 'rbf', probability=True)
+        C = 1.0
+        epsilon = 0.1
+
+        self.svm = svm.SVR(kernel = 'rbf', C=C, epsilon=epsilon)
 
     def train(self):
+        print("Training Support Vector Regressor...")
         self.svm.fit(self.x_train, self.y_train)
+        print("SVR Training Complete.")
 
     def predict(self, X):
-        return self.svm.predict(X), None
+        predictions = self.svm.predict(X)
+        return predictions, None
+
+
+# Linear Regression class
+class LinearRegression(Model_):
+    def __init__(self, dataset_path):
+        super().__init__(dataset_path)
+        from sklearn.linear_model import LinearRegression  # Import Linear Regression model
+        
+        self.lr = LinearRegression()  # Initialize the model
+    
+    def train(self):
+        self.lr.fit(self.x_train, self.y_train)  # Train the linear regression model
+    
+    def predict(self, X):
+        return self.lr.predict(X), None  # Predict values for the input X
 
 
 #RNN class
@@ -258,16 +300,60 @@ class RNN(Model_):
         self.model.add(SimpleRNN(units=50, return_sequences=False, input_shape=(self.x_train.shape[1], self.x_train.shape[2])))
         self.model.add(Dropout(0.2))
         self.model.add(Dense(units=50, activation='relu'))
-        self.model.add(Dense(units=1, activation='sigmoid'))
-        self.model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])  # Use 'categorical_crossentropy' for multi-class
+        self.model.add(Dense(units=1)) #, activation='linear'
+        self.model.compile(optimizer='adam', loss='mse', metrics=['mae'])  # Use 'categorical_crossentropy' for multi-class
+        self.model.summary()
 
     def train(self):
-        self.history = self.model.fit(self.x_train, self.y_train, epochs=10, batch_size=64, validation_data=(self.x_test, self.y_test), verbose=2)
+
+        import tensorflow
+        from tensorflow.keras.callbacks import ModelCheckpoint
+
+        output_dir = self.get_output_dir()
+        checkpoint_filepath = os.path.join(output_dir, 'rnn_best_weights.weights.h5')
+        #model_save_filepath = os.path.join(output_dir, 'rnn_entire_model.h5')
+
+        # --- Create the ModelCheckpoint callback ---
+        # Monitor 'val_loss' to save the model when validation loss is lowest
+        # save_weights_only=True saves only the weights
+        # save_best_only=True ensures only the best model (lowest val_loss) is kept
+
+        cp_callback = tensorflow.keras.callbacks.ModelCheckpoint(
+            filepath=checkpoint_filepath,
+            save_weights_only=True,
+            monitor='val_loss', # Or 'val_accuracy' if preferred
+            mode='min',         # 'min' for loss, 'max' for accuracy
+            save_best_only=True,
+            verbose=1           # Print messages when weights are saved
+        )
+
+        nb_epochs = 10
+        batch_size = 64
+
+        print(f"\n--- Starting RNN Training (saving best weights to {checkpoint_filepath}) ---")
+        self.history = self.model.fit(
+            self.x_train,
+            self.y_train,
+            epochs=nb_epochs,
+            batch_size=batch_size,
+            validation_data=(self.x_test, self.y_test),
+            verbose=2,
+            callbacks=[cp_callback]
+        )
+        print("--- RNN Training Finished ---")
+
+        '''
+        try:
+            self.model.save(model_save_filepath)
+            print(f"Entire RNN model saved to: {model_save_filepath}")
+        except Exception as e:
+            print(f"Error saving the entire RNN model: {e}")
+        '''
+
         self._save_learning_curves(self.history)
+
 
     def predict(self, X):
         y_pred = self.model.predict(self.x_test)
-        y_pred_classes = (y_pred > 0.5).astype(int)  # Convert probabilities to binary class labels
-        return y_pred_classes, y_pred
-
+        return y_pred, y_pred
 
